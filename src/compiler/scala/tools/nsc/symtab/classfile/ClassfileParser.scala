@@ -29,6 +29,7 @@ import scala.reflect.internal.util.ReusableInstance
 import scala.reflect.io.{NoAbstractFile, PlainFile, ZipArchive}
 import scala.tools.nsc.util.ClassPath
 import scala.tools.nsc.io.AbstractFile
+import scala.tools.nsc.tasty.TreeUnpickler.UnpickleMode
 import scala.tools.nsc.tasty.{TastyHeaderUnpickler, TastyReader}
 import scala.util.control.NonFatal
 
@@ -107,6 +108,11 @@ abstract class ClassfileParser(reader: ReusableInstance[ReusableDataReader]) {
   private object unpickler extends scala.reflect.internal.pickling.UnPickler {
     val symbolTable: ClassfileParser.this.symbolTable.type = ClassfileParser.this.symbolTable
   }
+
+  private class TASTYUnpickler(bytes: Array[Byte], mode: UnpickleMode = UnpickleMode.TopLevel)
+    extends {
+      val symbolTable: ClassfileParser.this.symbolTable.type = ClassfileParser.this.symbolTable
+    } with tasty.ScalacUnpickler(bytes, mode) with tasty.TASTYUniverse
 
   private def handleMissing(e: MissingRequirementError) = {
     if (settings.debug) e.printStackTrace
@@ -1248,9 +1254,13 @@ abstract class ClassfileParser(reader: ReusableInstance[ReusableDataReader]) {
           reporter.error(NoPosition, s"Tasty UUID ($tastyUUID) file did not correspond the tasty UUID ($expectedUUID) declared in the classfile $file.")
         }
         reporter.echo(NoPosition, s"Tasty UUID = $tastyUUID for classfile $file.") // works!
-        TASTY
+        tastyBytes
       }
-      parseTASTYBytes()
+
+      AnyRefClass // Force scala.AnyRef, otherwise we get "error: Symbol AnyRef is missing from the classpath"
+      val tastyBytes = parseTASTYBytes()
+      reporter.echo(NoPosition, s"PARSING FOR $clazz, $staticModule, ${file.name.stripSuffix(".class") + ".tasty"}")
+      new TASTYUnpickler(tastyBytes).unpickle(clazz, staticModule, file.name.stripSuffix(".class") + ".tasty")
     } else if (!isScalaRaw && innersStart != -1) {
       in.bp = innersStart
       val entries = u2()
