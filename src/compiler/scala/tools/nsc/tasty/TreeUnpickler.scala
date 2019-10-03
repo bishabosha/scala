@@ -300,7 +300,7 @@ abstract class TreeUnpickler(reader: TastyReader,
               pt => readType())
           })
           goto(end)
-          result.asInstanceOf[LT].asReflectType(ctx.owner)
+          result.asInstanceOf[LT].canonicalForm
         }
 
         val result =
@@ -1390,7 +1390,7 @@ abstract class TreeUnpickler(reader: TastyReader,
             case LAMBDAtpt =>
               val tparams = readParams[NoCycle](TYPEPARAM)
               val body    = readTpt()
-              TypeTree(TypeParamLambda(tparams.map(symFromNoCycle), body.tpe).asReflectType)
+              TypeTree(TypeParamLambda(tparams.map(symFromNoCycle), body.tpe).canonicalForm)
             //  LambdaTypeTree(tparams, body)
 //            case MATCHtpt =>
 //              val fst = readTpt()

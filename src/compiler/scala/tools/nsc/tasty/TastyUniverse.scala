@@ -74,11 +74,11 @@ trait TastyUniverse { self =>
       private def getFlag(mask: FlagSet): FlagSet = {
         mask & (if ((mask & Flags.PhaseIndependentFlags) == mask) flagSet else flags)
       }
-      def not(mask: FlagSet): Boolean = getFlag(mask) == 0
-      def is(mask: FlagSet): Boolean = getFlag(mask) != 0
+      def not(mask: FlagSet): Boolean = !isOneOf(mask)
+      def is(mask: FlagSet): Boolean = getFlag(mask) == mask
       def ensuring(when: FlagSet, is: FlagSet): FlagSet = if (flagSet.is(when)) flagSet | is else flagSet
       def is(mask: FlagSet, butNot: FlagSet): Boolean = is(mask) && not(butNot)
-      def isOneOf(mask: FlagSet): Boolean = is(mask)
+      def isOneOf(mask: FlagSet): Boolean = getFlag(mask) != 0
     }
   }
 
@@ -122,7 +122,8 @@ trait TastyUniverse { self =>
       def termRef: Type = symbolTable.typeRef(sym.owner.toType, sym, Nil)
       def safeOwner: Symbol = if (sym.owner eq sym) sym else sym.owner
       def isOneOf(mask: FlagSet): Boolean = sym.hasFlag(mask)
-      def is(mask: FlagSet, butNot: FlagSet = NoFlags): Boolean =
+      def is(mask: FlagSet): Boolean = sym.hasAllFlags(mask)
+      def is(mask: FlagSet, butNot: FlagSet): Boolean =
         if (butNot == NoFlags)
           sym.hasFlag(mask)
         else
@@ -346,7 +347,7 @@ trait TastyUniverse { self =>
 
     /**Best effort to transform this to an equivalent canonical representation in scalac.
      */
-    final def asReflectType: Type = {
+    final def canonicalForm: Type = {
       val resUpper = resType.upperBound
       val resLower = if (resType `eq` resType.bounds) resType.lowerBound else definitions.NothingTpe
       if (resUpper.typeArgs.nonEmpty && resUpper.typeArgs == paramInfos) {
