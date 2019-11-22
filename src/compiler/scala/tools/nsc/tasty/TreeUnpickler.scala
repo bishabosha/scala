@@ -137,7 +137,10 @@ abstract class TreeUnpickler(reader: TastyReader,
     def skipTree(): Unit = skipTree(readByte())
 
     def skipParams(): Unit =
-      while (nextByte == PARAMS || nextByte == TYPEPARAM) skipTree()
+      while ({
+        val tag = nextByte
+        tag == PARAM || tag == TYPEPARAM || tag == PARAMEND
+      }) skipTree()
 
     def skipTypeParams(): Unit =
       while (nextByte == TYPEPARAM) skipTree()
@@ -686,6 +689,7 @@ abstract class TreeUnpickler(reader: TastyReader,
           case GIVEN => addTastyFlag(Given)
           case PARAMsetter => addFlag(ParamAccessor)
           case EXPORTED => addTastyFlag(Exported)
+          case OPEN => addTastyFlag(Open)
           case PRIVATEqualified =>
             readByte()
             privateWithin = readWithin(ctx)
@@ -695,7 +699,7 @@ abstract class TreeUnpickler(reader: TastyReader,
           case ANNOTATION =>
             annotFns = readAnnot(ctx) :: annotFns
           case tag =>
-            assert(assertion = false, s"illegal modifier tag $tag at $currentAddr, end = $end")
+            assert(assertion = false, s"illegal modifier tag ${astTagToString(tag)} at $currentAddr, end = $end")
         }
       }
       (flags, tastyFlagSet, /*annotFns.reverse,*/ Nil, privateWithin)
@@ -811,12 +815,12 @@ abstract class TreeUnpickler(reader: TastyReader,
 
       val completer = sym.completer
 
-      def readParamss(implicit ctx: Context): List[List[NoCycle/*ValDef*/]] = {
-        collectWhile(nextByte == PARAMS) {
-          readByte()
-          readEnd()
-          readParams(PARAM)
-        }
+      def readParamss(implicit ctx: Context): List[List[NoCycle/*ValDef*/]] = nextByte match {
+        case PARAM | PARAMEND =>
+          readParams[NoCycle](PARAM) ::
+            (if (nextByte == PARAMEND) { readByte(); readParamss } else Nil)
+
+        case _ => Nil
       }
 
       val localCtx = localContext(sym)
@@ -954,12 +958,12 @@ abstract class TreeUnpickler(reader: TastyReader,
 //      val tag = readByte()
 //      val end = readEnd()
 //
-//      def readParamss(implicit ctx: Context): List[List[ValDef]] = {
-//        collectWhile(nextByte == PARAMS) {
-//          readByte()
-//          readEnd()
-//          readParams[ValDef](PARAM)
-//        }
+//      def readParamss(implicit ctx: Context): List[List[ValDef]] = nextByte match {
+//        case PARAM | PARAMEND =>
+//          readParams[ValDef](PARAM) ::
+//            (if (nextByte == PARAMEND) { readByte(); readParamss } else Nil)
+//
+//        case _ => Nil
 //      }
 //
 //      val localCtx = localContext(sym)
@@ -1099,9 +1103,9 @@ abstract class TreeUnpickler(reader: TastyReader,
 //          untpd.ValDef(readName(), readTpt(), EmptyTree).withType(NoType)
 //        }
 //        else EmptyValDef
+//      cls.setNoInitsFlags(parentsKind(parents), bodyFlags)
 //      cls.info = ClassInfo(cls.owner.thisType, cls, parentTypes, cls.unforcedDecls,
 //        if (self.isEmpty) NoType else self.tpt.tpe)
-//      cls.setNoInitsFlags(parentsKind(parents), bodyFlags)
 //      val constr = readIndexedDef().asInstanceOf[DefDef]
 //      val mappedParents = parents.map(_.changeOwner(localDummy, constr.symbol))
 //
@@ -1155,13 +1159,13 @@ abstract class TreeUnpickler(reader: TastyReader,
 //      assert(sourcePathAt(start).isEmpty)
 //      readByte()
 //      readEnd()
-//      val importGiven = nextByte == GIVEN
+//      val importGiven = nextByte == GIVEN // TODO: drop the next time we bump Tasty versions
 //      if (importGiven) readByte()
 //      val expr = readTerm()
-//      setSpan(start, Import(importGiven, expr, readSelectors()))
+//      setSpan(start, Import(expr, expr, readSelectors()))
 //    }
 
-//    def readSelectors()(implicit ctx: Context): List[untpd.Tree] = nextByte match {
+//    def readSelectors()(implicit ctx: Context): List[untpd.Tree] = nextByte match { // TODO fetch latest
 //      case IMPORTED =>
 //        val start = currentAddr
 //        assert(sourcePathAt(start).isEmpty)
@@ -1193,13 +1197,16 @@ abstract class TreeUnpickler(reader: TastyReader,
 //      readIndexedStats(exprOwner, end)
 //    }
 
-   def readIndexedParams[T <: MaybeCycle /*MemberDef*/](tag: Int)(implicit ctx: Context): List[T] =
-     collectWhile(nextByte == tag) { readIndexedMember().asInstanceOf[T] }
+  def readIndexedParams[T <: MaybeCycle /*MemberDef*/](tag: Int)(implicit ctx: Context): List[T] =
+    collectWhile(nextByte == tag) { readIndexedMember().asInstanceOf[T] }
 
-   def readParams[T <: MaybeCycle /*MemberDef*/](tag: Int)(implicit ctx: Context): List[T] = {
-     fork.indexParams(tag)
-     readIndexedParams(tag)
-   }
+  def readParams[T <: MaybeCycle /*MemberDef*/](tag: Int)(implicit ctx: Context): List[T] =
+    if (nextByte == tag) {
+      fork.indexParams(tag)
+      readIndexedParams(tag)
+    }
+    else Nil
+
 
 // ------ Reading trees -----------------------------------------------------
 
