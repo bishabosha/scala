@@ -79,7 +79,6 @@ trait FlagOps extends TastyKernel {
         case Given       => "Given"
         case Exported    => "Exported"
         case NoInits     => "NoInits"
-        case Open        => "Open"
       }
     } mkString(" | ")
 }
