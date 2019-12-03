@@ -284,6 +284,8 @@ class TreeUnpickler[Tasty <: TastyUniverse](
         Constant(null)
       case CLASSconst =>
         Constant(readType())
+      case _ =>
+        sys.error(s"unknown tag ${astTagToString(tag)} when reading constant.")
     }
 
     /** Read a type */
@@ -1276,8 +1278,8 @@ class TreeUnpickler[Tasty <: TastyUniverse](
 //      }
 
       def readSimpleTerm(): Tree = tag match {
-//        case SHAREDterm =>
-//          forkAt(readAddr()).readTerm()
+       case SHAREDterm =>
+         forkAt(readAddr()).readTerm()
 //        case IDENT =>
 //          untpd.Ident(readName()).withType(readType())
         case IDENTtpt =>
@@ -1452,9 +1454,9 @@ class TreeUnpickler[Tasty <: TastyUniverse](
       if (sctx `ne` ctx) return readTpt()(sctx)
       val start = currentAddr
       val tpt: Tree = nextByte match {
-//        case SHAREDterm =>
-//          readByte()
-//          forkAt(readAddr()).readTpt()
+       case SHAREDterm =>
+         readByte()
+         forkAt(readAddr()).readTpt()
 //        case BLOCK =>
 //          readByte()
 //          val end = readEnd()
