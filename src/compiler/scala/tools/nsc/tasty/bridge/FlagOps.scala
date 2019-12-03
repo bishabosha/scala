@@ -25,7 +25,6 @@ trait FlagOps extends TastyKernel {
     val JavaStatic: FlagSet = ModifierFlags.STATIC
     val Module: FlagSet = Flags.MODULE
     val Trait: FlagSet = Flag.TRAIT
-    val Enum: FlagSet = Flag.ENUM
     val Local: FlagSet = Flag.LOCAL
     val Synthetic: FlagSet = Flag.SYNTHETIC
     val Artifact: FlagSet = Flag.ARTIFACT
@@ -79,6 +78,7 @@ trait FlagOps extends TastyKernel {
         case Given       => "Given"
         case Exported    => "Exported"
         case NoInits     => "NoInits"
+        case Enum        => "Enum"
       }
     } mkString(" | ")
 }
