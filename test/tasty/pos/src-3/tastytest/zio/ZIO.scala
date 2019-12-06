@@ -19,4 +19,5 @@ package tastytest.zio
 sealed trait ZIO[-R, +E, +A] extends Serializable { self =>
   def flatMap[R1 <: R, E1 >: E, B](k: A => ZIO[R1, E1, B]): ZIO[R1, E1, B] = ???
   def map[B](f: A => B): ZIO[R, E, B] = ???
+  final def fold[B](failure: E => B, success: A => B)(implicit ev: CanFail[E]): URIO[R, B] = ???
 }

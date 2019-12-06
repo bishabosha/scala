@@ -13,25 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package tastytest
 
-import zio._
-import zio.console._
+package tastytest.zio
 
-object ZIOHello {
 
-  def main(args: Array[String]): Unit = {
-    sys.exit((new DefaultRuntime {}).unsafeRun(run(args.toList)))
-  }
+trait App extends DefaultRuntime {
 
-  def run(args: List[String]): URIO[Console, Int] =
-    myAppLogic.fold(_ => 1, _ => 0)
+  def run(args: List[String]): ZIO[ZEnv, Nothing, Int]
 
-  val myAppLogic =
-    for {
-      _    <- putStrLn("Hello! What is your name?")
-      name <- getStrLn
-      _    <- putStrLn(s"Hello, ${name}, welcome to ZIO!")
-    } yield ()
-
+  final def main(args0: Array[String]): Unit = ()
 }
