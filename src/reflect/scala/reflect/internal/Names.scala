@@ -501,6 +501,7 @@ trait Names extends api.Names {
     def localName: TermName            = getterName append LOCAL_SUFFIX_STRING
     def setterName: TermName           = getterName append SETTER_SUFFIX_STRING
     def getterName: TermName           = dropTraitSetterSeparator.dropSetter.dropLocal
+    def extensionName: TermName        = name.append("$extension").toTermName
 
     private def dropTraitSetterSeparator: TermName =
       name indexOf TRAIT_SETTER_SEPARATOR_STRING match {
