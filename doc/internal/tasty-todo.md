@@ -1,5 +1,9 @@
 # Todo Tasty
 
+- Add inParent state to context, only look at expr in annotated parents
+- Add inAnnotation state to Context, only allow basic trees
+  -  strip out all other tree unpickling stuff into an archive file just for reference
+
 - [ ] Any tree possible could be in an annotation (need to readapt readIndexedMember to returning trees)
 - [ ] Refinement types
 - [ ] scala 3 enum constants are not in the companion, but are a static field.
