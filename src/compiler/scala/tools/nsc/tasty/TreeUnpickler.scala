@@ -231,8 +231,8 @@ class TreeUnpickler[Tasty <: TastyUniverse](
       }
 
    /** Read types or bounds in an interleaved sequence of (parameter) names and types/bounds */
-    def readParamTypes[T <: Type](end: Addr)(implicit ctx: Context): List[T] =
-      until(end) { readNat(); readType().asInstanceOf[T] }
+    def readParamTypes[T <: Type](end: Addr, inParent: Boolean)(implicit ctx: Context): List[T] =
+      until(end) { readNat(); readType(inParent).asInstanceOf[T] }
 
     /** Read reference to definition and return symbol created at that definition */
     def readSymRef()(implicit ctx: Context): Symbol = symbolAt(readAddr())
@@ -243,7 +243,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
         sym
       case None =>
         ctx.log(s"No symbol at $addr")
-        val sym = forkAt(addr).createSymbol()(ctx.withOwner(ownerTree.findOwner(addr)))
+        val sym = forkAt(addr).createSymbol(inParent = false)(ctx.withOwner(ownerTree.findOwner(addr)))
         ctx.log(s"forward reference to $sym")
         sym
     }
@@ -254,10 +254,10 @@ class TreeUnpickler[Tasty <: TastyUniverse](
         assert(ctx.owner === sym.owner, s"owner discrepancy for $sym, expected: ${showSym(ctx.owner)}, found: ${showSym(sym.owner)}")
         sym
       case None =>
-        createSymbol()
+        createSymbol(inParent = false)
     }
 
-    def readConstant(tag: Int)(implicit ctx: Context): Constant = (tag: @switch) match {
+    def readConstant(tag: Int, inParent: Boolean)(implicit ctx: Context): Constant = (tag: @switch) match {
       case UNITconst =>
         Constant(())
       case TRUEconst =>
@@ -283,13 +283,13 @@ class TreeUnpickler[Tasty <: TastyUniverse](
       case NULLconst =>
         Constant(null)
       case CLASSconst =>
-        Constant(readType())
+        Constant(readType(inParent))
       case _ =>
         sys.error(s"unknown tag ${astTagToString(tag)} when reading constant")
     }
 
     /** Read a type */
-    def readType()(implicit ctx: Context): Type = {
+    def readType(inParent: Boolean)(implicit ctx: Context): Type = {
       val start = currentAddr
       val tag = readByte()
       ctx.log(s"reading type ${astTagToString(tag)} at $start")
@@ -298,6 +298,8 @@ class TreeUnpickler[Tasty <: TastyUniverse](
         typeAtAddr(start) = tp
         op
       }
+
+      def recReadTerm()(implicit ctx: Context) = if (inParent) TypeTree(readParentFromTerm()) else readTerm()
 
       def readLengthType(): Type = {
         val end = readEnd()
@@ -311,8 +313,8 @@ class TreeUnpickler[Tasty <: TastyUniverse](
             val paramReader = nameReader.fork
             val paramNames = nameReader.readParamNames(end).map(nameMap)
             companion(paramNames)(
-              pt => registeringType(pt, paramReader.readParamTypes[PInfo](end)),
-              pt => readType())
+              pt => registeringType(pt, paramReader.readParamTypes[PInfo](end, inParent)),
+              pt => readType(inParent))
           })
           goto(end)
           val canonical = {
@@ -357,16 +359,16 @@ class TreeUnpickler[Tasty <: TastyUniverse](
             //     // Note that the lambda "rt => ..." is not equivalent to a wildcard closure!
             //     // Eta expansion of the latter puts readType() out of the expression.
             case APPLIEDtype =>
-              val tpe = readType()
-              mkTypeRef(tpe.typeSymbolDirect.owner.tpe, tpe.typeSymbolDirect, until(end)(readType()))
+              val tpe = readType(inParent)
+              mkTypeRef(tpe.typeSymbolDirect.owner.tpe, tpe.typeSymbolDirect, until(end)(readType(inParent)))
             case TYPEBOUNDS =>
-              val lo = readType()
-              val hi = readType()
+              val lo = readType(inParent)
+              val hi = readType(inParent)
               mkTypeBounds(lo, hi) // if (lo.isMatch && (lo `eq` hi)) MatchAlias(lo) else TypeBounds(lo, hi)
             case ANNOTATEDtype =>
-              mkAnnotatedType(readType(), mkAnnotation(readTerm()))
+              mkAnnotatedType(readType(inParent), mkAnnotation(recReadTerm()))
             case ANDtype =>
-              mkIntersectionType(readType(), readType())
+              mkIntersectionType(readType(inParent), readType(inParent))
             // case ORtype =>
             //   OrType(readType(), readType())
             // case SUPERtype =>
@@ -401,14 +403,14 @@ class TreeUnpickler[Tasty <: TastyUniverse](
           case TYPEREFdirect | TERMREFdirect =>
             mkTypeRef(noPrefix, readSymRef(), Nil)
           case TYPEREFsymbol | TERMREFsymbol =>
-            readSymNameRef()
+            readSymNameRef(inParent = false)
           case TYPEREFpkg =>
             readPackageRef().moduleClass.typeRef
           case TERMREFpkg =>
             readPackageRef().termRef
           case TYPEREF =>
             val name = readTastyName()
-            val pre = readType()
+            val pre = readType(inParent)
             if (pre.typeSymbol === defn.ScalaPackage && ( name === nme.And || name === nme.Or) ) {
               if (name === nme.And) {
                 AndType
@@ -423,7 +425,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
             }
           case TERMREF =>
             val sname = readTastyName()
-            val prefix = readType()
+            val prefix = readType(inParent)
             sname match {
               case TastyName.SignedName(name, sig) =>
                 ??? // TermRef(prefix, name, prefix.member(name).atSignature(sig))
@@ -431,7 +433,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
                 mkTypeRef(prefix, name, isTerm = true)
             }
           case THIS =>
-            val sym = readType() match {
+            val sym = readType(inParent) match {
               case tpe: TypeRef => tpe.sym
               case tpe: SingleType => tpe.sym
             }
@@ -447,26 +449,26 @@ class TreeUnpickler[Tasty <: TastyUniverse](
           case RECthis =>
             sys.error("RECthis")//readTypeRef().asInstanceOf[RecType].recThis
           case TYPEALIAS =>
-             readType()// TypeAlias(readType())
+             readType(inParent)// TypeAlias(readType())
           case SHAREDtype =>
             val ref = readAddr()
-            typeAtAddr.getOrElseUpdate(ref, forkAt(ref).readType())
+            typeAtAddr.getOrElseUpdate(ref, forkAt(ref).readType(inParent))
           case BYNAMEtype =>
-            mkAppliedType(defn.ByNameParamClass, readType()) // ExprType(readType())
+            mkAppliedType(defn.ByNameParamClass, readType(inParent)) // ExprType(readType())
           case ENUMconst =>
             errorTasty("Enum Constant") //Constant(readTypeRef().termSymbol)
             errorType
           case _ =>
-            mkConstantType(readConstant(tag))
+            mkConstantType(readConstant(tag, inParent))
         }
       }
 
       if (tag < firstLengthTreeTag) readSimpleType() else readLengthType()
     }
 
-    private def readSymNameRef()(implicit ctx: Context): Type = {
+    private def readSymNameRef(inParent: Boolean)(implicit ctx: Context): Type = {
       val sym    = readSymRef()
-      val prefix = readType()
+      val prefix = readType(inParent)
       val res    = NamedType(prefix, sym)
       prefix match {
         case prefix: ThisType if (prefix.sym `eq` sym.owner) && sym.isTypeParameter /*&& !sym.is(Opaque)*/ =>
@@ -484,11 +486,11 @@ class TreeUnpickler[Tasty <: TastyUniverse](
       else ctx.requiredPackage(name)
     }
 
-   def readTypeRef(): Type =
-     typeAtAddr(readAddr())
+    def readTypeRef(): Type =
+      typeAtAddr(readAddr())
 
-    def readTypeAsTypeRef()(implicit ctx: Context): TypeRef =
-      readType().asInstanceOf[TypeRef]
+    def readTypeAsTypeRef(inParent: Boolean)(implicit ctx: Context): TypeRef =
+      readType(inParent).asInstanceOf[TypeRef]
 
 // ------ Reading definitions -----------------------------------------------------
 
@@ -537,11 +539,11 @@ class TreeUnpickler[Tasty <: TastyUniverse](
     /** Create symbol of definition node and enter in symAtAddr map
      *  @return  the created symbol
      */
-    def createSymbol()(implicit ctx: Context): Symbol = nextByte match {
+    def createSymbol(inParent: Boolean)(implicit ctx: Context): Symbol = nextByte match {
       case VALDEF | DEFDEF | TYPEDEF | TYPEPARAM | PARAM =>
         createMemberSymbol()
       case BIND =>
-        createBindSymbol()
+        createBindSymbol(inParent)
       case TEMPLATE =>
         val localDummy = ctx.newLocalDummy(ctx.owner)
         registerSym(currentAddr, localDummy)
@@ -550,7 +552,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
         throw new Error(s"illegal createSymbol at $currentAddr, tag = $tag")
     }
 
-    private def createBindSymbol()(implicit ctx: Context): Symbol = {
+    private def createBindSymbol(inParent: Boolean)(implicit ctx: Context): Symbol = {
       val start = currentAddr
       readByte() // tag
       readEnd()  // end
@@ -562,7 +564,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
       val typeReader = fork
       val completer = new TastyLazyType {
         override def complete(sym: Symbol): Unit =
-          sym.info = typeReader.readType()
+          sym.info = typeReader.readType(inParent)
       }
       val sym = ctx.newSymbol(ctx.owner, name, FlagSets.Case, completer)
       registerSym(start, sym)
@@ -752,12 +754,12 @@ class TreeUnpickler[Tasty <: TastyUniverse](
     }
 
     private val readTypedWithin: Context => Symbol =
-      implicit ctx => readType().typeSymbolDirect
+      implicit ctx => readType(inParent = false).typeSymbolDirect
 
     private val readTypedAnnot: Context => Symbol => Annotation = { implicit ctx =>
       readByte()
       val end = readEnd()
-      val tp = readType()
+      val tp = readType(inParent = false)
       val lazyAnnotTree = readLaterWithOwner(end, rdr => ctx => rdr.readTerm()(ctx))
       owner => Annotation.deferredSymAndTree(owner)(tp.typeSymbolDirect)(lazyAnnotTree(owner).complete)
     }
@@ -806,7 +808,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
       if (sctx `ne` ctx) return processPackage(op)(sctx)
       readByte()
       val end = readEnd()
-      val tpe = readTypeAsTypeRef()
+      val tpe = readTypeAsTypeRef(inParent = false)
       val pid = ref(tpe).asInstanceOf[RefTree]
       op(pid, end)(localContext(tpe.typeSymbolDirect.moduleClass))
     }
@@ -884,7 +886,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
             }
           }
           val vparamss = readParamss(localCtx)
-          val tpt = readTpt()(localCtx)
+          val tpt = readTpt(inParent = false)(localCtx)
           val valueParamss = ctx.normalizeIfConstructor(
             vparamss.map(_.map(symFromNoCycle)), name === nme.CONSTRUCTOR)
           // if (tname === TastyName.SimpleName("apply")
@@ -910,7 +912,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
           val isInline = completer.tastyFlagSet.is(Inline)
           val unsupported = completer.tastyFlagSet &~ (Inline | Enum)
           assertTasty(!unsupported, s"unsupported Scala 3 flags on $sym: ${show(unsupported)}")
-          val tpe = readTpt()(localCtx).tpe
+          val tpe = readTpt(inParent = false)(localCtx).tpe
           if (isInline) assertTasty(isConstantType(tpe), s"inline val ${sym.nameString} with non-constant type $tpe")
           sym.info = if (sym.isMethod) mkNullaryMethodType(tpe) else tpe
           NoCycle(at = symAddr)
@@ -924,7 +926,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
           else {
             sym.info = emptyTypeBounds // needed to avoid cyclic references when unpickling rhs, see i3816.scala
             // sym.setFlag(Provisional)
-            val rhs = readTpt()(localCtx)
+            val rhs = readTpt(inParent = false)(localCtx)
             sym.info = new NoCompleter {
               override def completerTypeParams(sym: Symbol)(implicit ctx: Context) =
                 rhs.tpe.typeParams
@@ -937,7 +939,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
           }
         case PARAM =>
           assertTasty(!completer.tastyFlagSet, s"unsupported Scala 3 flags on parameter $sym: ${show(completer.tastyFlagSet)}")
-          val tpt = readTpt()(localCtx)
+          val tpt = readTpt(inParent = false)(localCtx)
           if (nothingButMods(end) && sym.not(ParamAccessor)) {
             sym.info = tpt.tpe
             NoCycle(at = symAddr)
@@ -976,7 +978,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
       val parents = collectWhile(nextByte != SELFDEF && nextByte != DEFDEF) {
         nextUnsharedTag match {
           case APPLY | TYPEAPPLY | BLOCK => readParentFromTerm()(parentCtx)
-          case _ => readTpt()(parentCtx).tpe
+          case _ => readTpt(inParent = true)(parentCtx).tpe
         }
       }
       val parentTypes = parents.map { tp =>
@@ -1002,7 +1004,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
         ctx.log(s"Template: adding self-type of $cls")
         readByte()
         readTastyName()
-        val selfTpe = readTpt().tpe
+        val selfTpe = readTpt(inParent = false).tpe
         ctx.log(s"Template: self-type is $selfTpe")
         cls.typeOfThis = selfTpe
       }
@@ -1318,7 +1320,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
 
       def readPathTerm(): Tree = {
         goto(start)
-        readType() match {
+        readType(inParent = false) match {
           case path: TypeRef => TypeTree(path)
           case path: SingleType => TypeTree(path)
           case path: ThisType => new This(nme.EMPTY.toTypeName).setType(path)
@@ -1349,9 +1351,9 @@ class TreeUnpickler[Tasty <: TastyUniverse](
         case SHAREDterm =>
           forkAt(readAddr()).readTerm()
         case IDENT =>
-          Ident(readEncodedName()).setType(readType())
+          Ident(readEncodedName()).setType(readType(inParent = false))
         case IDENTtpt =>
-          Ident(readEncodedName().toTypeName).setType(readType())
+          Ident(readEncodedName().toTypeName).setType(readType(inParent = false))
         case SELECT =>
           val qual = readTastyName()
           completeSelect(qual, qual.signature.map(erasedNameToErasedType), isTerm = true)
@@ -1361,7 +1363,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
           val (qual, tref) = readQualId()
           new This(qual.name.toTypeName).setType(mkThisType(tref.sym))
         case NEW =>
-          val tpt = readTpt()
+          val tpt = readTpt(inParent = false)
           New(tpt).setType(tpt.tpe)
         case THROW =>
           Throw(readTerm()).setType(defn.NothingTpe)
@@ -1369,7 +1371,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
           val tpt = readTerm()
           SingletonTypeTree(tpt).setType(tpt.tpe)
         case BYNAMEtpt =>
-          val tpt = readTpt()
+          val tpt = readTpt(inParent = false)
           mkFunctionTypeTree(Nil, tpt).setType(defn.byNameType(tpt.tpe))
         case NAMEDARG =>
           val name  = readEncodedName()
@@ -1393,11 +1395,11 @@ class TreeUnpickler[Tasty <: TastyUniverse](
               Apply(fn, args).setType(fn.tpe.dealiasWiden.finalResultType)
             case TYPEAPPLY =>
               val term = readTerm()
-              val args = until(end)(readTpt())
+              val args = until(end)(readTpt(inParent = false))
               TypeApply(term, args).setType(term.tpe.resultType.substituteTypes(term.tpe.typeParams, args.map(_.tpe)))
             case TYPED =>
               val expr = readTerm()
-              val tpt = readTpt()
+              val tpt = readTpt(inParent = false)
               Typed(expr, tpt).setType(tpt.tpe)
             case ASSIGN =>
               Assign(readTerm(), readTerm()).setType(defn.UnitTpe)
@@ -1433,7 +1435,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
               }
             case LAMBDA => // TODO tasty: if we need trees then we need to either turn this closure to the result of Delambdafy, or resugar to a Function
               val meth = readTerm()
-              val tpt = ifBefore(end)(readTpt(), emptyTree)
+              val tpt = ifBefore(end)(readTpt(inParent = false), emptyTree)
               TypeTree(meth.tpe) //Closure(Nil, meth, tpt)
             case MATCH =>
               if (nextByte === IMPLICIT) {
@@ -1468,12 +1470,12 @@ class TreeUnpickler[Tasty <: TastyUniverse](
 //              val levels = readNat()
 //              readTerm().outerSelect(levels, SkolemType(readType()))
             case REPEATED =>
-              val elemtpt = readTpt()
+              val elemtpt = readTpt(inParent = false)
               SeqLiteral(until(end)(readTerm()), elemtpt).setType(elemtpt.tpe)
             case BIND =>
-              val sym = symAtAddr.getOrElse(start, forkAt(start).createSymbol())
+              val sym = symAtAddr.getOrElse(start, forkAt(start).createSymbol(inParent = false))
               readTastyName()
-              readType()
+              readType(inParent = false)
               val body = readTerm()
               Bind(sym, body).setType(body.tpe)
             case ALTERNATIVE =>
@@ -1486,7 +1488,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
                   readByte()
                   readTerm()
                 }
-              val patType = readType()
+              val patType = readType(inParent = false)
               val argPats = until(end)(readTerm())
               UnApply(fn, implicitArgs, argPats, patType)
 //            case REFINEDtpt =>
@@ -1499,8 +1501,8 @@ class TreeUnpickler[Tasty <: TastyUniverse](
               // If we do directly a tpd.AppliedType tree we might get a
               // wrong number of arguments in some scenarios reading F-bounded
               // types. This came up in #137 of collection strawman.
-              val tycon   = readTpt()
-              val args    = until(end)(readTpt())
+              val tycon   = readTpt(inParent = false)
+              val args    = until(end)(readTpt(inParent = false))
               if (tycon.tpe === AndType) {
                 val tpe = mkIntersectionType(args.map(_.tpe))
                 CompoundTypeTree(args).setType(tpe)
@@ -1509,12 +1511,12 @@ class TreeUnpickler[Tasty <: TastyUniverse](
                 AppliedTypeTree(tycon, args).setType(ownType)
               }
             case ANNOTATEDtpt =>
-              val tpt = readTpt()
+              val tpt = readTpt(inParent = false)
               val annot = readTerm()
               Annotated(tpt, annot).setType(mkAnnotatedType(tpt.tpe, mkAnnotation(annot)))
             case LAMBDAtpt =>
               val tparams = readParams[NoCycle](TYPEPARAM)
-              val body    = readTpt()
+              val body    = readTpt(inParent = false)
               TypeTree(TypeParamLambda(tparams.map(symFromNoCycle), body.tpe).canonicalForm) //LambdaTypeTree(tparams, body)
 //            case MATCHtpt =>
 //              val fst = readTpt()
@@ -1522,8 +1524,8 @@ class TreeUnpickler[Tasty <: TastyUniverse](
 //                if (nextUnsharedTag === CASEDEF) (EmptyTree, fst) else (fst, readTpt())
 //              MatchTypeTree(bound, scrut, readCases(end))
             case TYPEBOUNDStpt =>
-              val lo = readTpt()
-              val hi = if (currentAddr === end) lo else readTpt()
+              val lo = readTpt(inParent = false)
+              val hi = if (currentAddr === end) lo else readTpt(inParent = false)
               TypeBoundsTree(lo, hi).setType(mkTypeBounds(lo.tpe, hi.tpe))
 //            case HOLE =>
 //              readHole(end, isType = false)
@@ -1541,14 +1543,14 @@ class TreeUnpickler[Tasty <: TastyUniverse](
       tree
     }
 
-    def readTpt()(implicit ctx: Context): Tree = {
+    def readTpt(inParent: Boolean)(implicit ctx: Context): Tree = {
       val sctx = sourceChangeContext()
-      if (sctx `ne` ctx) return readTpt()(sctx)
+      if (sctx `ne` ctx) return readTpt(inParent)(sctx)
       val start = currentAddr
       val tpt: Tree = nextByte match {
         case SHAREDterm =>
           readByte()
-          forkAt(readAddr()).readTpt()
+          forkAt(readAddr()).readTpt(inParent)
 //        case BLOCK =>
 //          readByte()
 //          val end = readEnd()
@@ -1562,9 +1564,16 @@ class TreeUnpickler[Tasty <: TastyUniverse](
 //          val end = readEnd()
 //          readHole(end, isType = true)
         case tag =>
-          if (isTypeTreeTag(tag)) readTerm()
+          if (isTypeTreeTag(tag)) {
+            if (inParent) {
+              TypeTree(readParentFromTerm())
+            }
+            else {
+              readTerm()
+            }
+          }
           else {
-            val tp = readType()
+            val tp = readType(inParent)
             if (!(isNoType(tp) || isError(tp))) TypeTree(tp) else emptyTree
           }
       }
@@ -1589,7 +1598,9 @@ class TreeUnpickler[Tasty <: TastyUniverse](
         case SELECT =>
           val qual = readTastyName()
           completeSelectParent(qual, qual.signature.map(erasedNameToErasedType), isTerm = true)
-        case NEW => readTpt().tpe
+        case SELECTtpt =>
+          completeSelectParent(readTastyName(), NotAMethod, isTerm = false)
+        case NEW => readTpt(inParent = true).tpe
       }
 
       def readLengthTermAsType(): Type = {
@@ -1602,7 +1613,7 @@ class TreeUnpickler[Tasty <: TastyUniverse](
               fn.dealiasWiden.finalResultType
             case TYPEAPPLY =>
               val fn = readParentFromTerm()
-              val args = until(end)(readTpt())
+              val args = until(end)(readTpt(inParent = true))
               fn.resultType.substituteTypes(fn.typeParams, args.map(_.tpe))
             case BLOCK =>
               val exprReader = fork

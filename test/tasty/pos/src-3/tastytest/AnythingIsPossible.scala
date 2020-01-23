@@ -37,4 +37,6 @@ object AnythingIsPossible {
     class Super extends Box(super[SomeSuper].foo)
   }
 
+  class Annotated extends Serializable @unchecked
+
 }
